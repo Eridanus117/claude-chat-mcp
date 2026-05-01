@@ -13,6 +13,8 @@ It is useful when an MCP host has a short tool-call timeout but a Claude Code ta
 - `claude-result`: return the final result, or a running status if unfinished
 - `claude-cancel`: terminate a running job
 
+The repository also includes `bin/claude-job-watch`, a local file watcher for long-running jobs.
+
 ## Requirements
 
 - Rust 1.75 or newer
@@ -32,6 +34,12 @@ For local development:
 ```sh
 cargo build
 cargo test
+```
+
+To install the watcher script manually:
+
+```sh
+install -m 0755 bin/claude-job-watch ~/.local/bin/claude-job-watch
 ```
 
 ## MCP Configuration
@@ -104,6 +112,18 @@ Then poll:
 ```
 
 Use `claude-tail` for compact progress and `claude-events` when you need raw event details.
+
+## Local Watcher
+
+`claude-job-watch` reads local job files directly. It does not call Claude and does not call MCP tools, so it is useful when you want to wait without spending host-agent context on repeated polling.
+
+```sh
+claude-job-watch claude-1777570388560-57909
+claude-job-watch claude-1777570388560-57909 --interval 30
+claude-job-watch claude-1777570388560-57909 --once
+```
+
+The watcher uses the same default job directory rules as the MCP server. You can override the location with either `CLAUDE_CHAT_MCP_JOBS_DIR` or `--jobs-dir`.
 
 ## Notes
 

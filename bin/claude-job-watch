@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  claude-job-watch <jobId> [--interval seconds] [--jobs-dir path] [--once] [--quiet]
+
+Watch a claude-chat-mcp async job by reading local job files only. This does
+not call Claude and does not call MCP tools.
+
+Examples:
+  claude-job-watch claude-1777570388560-57909
+  claude-job-watch claude-1777570388560-57909 --interval 30
+  claude-job-watch claude-1777570388560-57909 --once
+
+Exit codes:
+  0  job succeeded
+  1  job failed or watcher error
+  2  job was cancelled
+USAGE
+}
+
+die() {
+  printf 'claude-job-watch: %s\n' "$*" >&2
+  exit 1
+}
+
+default_jobs_dir() {
+  if [[ -n "${CLAUDE_CHAT_MCP_JOBS_DIR:-}" ]]; then
+    printf '%s\n' "$CLAUDE_CHAT_MCP_JOBS_DIR"
+  elif [[ -n "${XDG_STATE_HOME:-}" ]]; then
+    printf '%s\n' "$XDG_STATE_HOME/claude-chat-mcp/jobs"
+  elif [[ -n "${HOME:-}" ]]; then
+    printf '%s\n' "$HOME/.local/state/claude-chat-mcp/jobs"
+  else
+    printf '%s\n' ".claude-chat-mcp/jobs"
+  fi
+}
+
+job_id=""
+interval=120
+jobs_dir="$(default_jobs_dir)"
+once=0
+quiet=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --interval)
+      [[ $# -ge 2 ]] || die "--interval requires seconds"
+      interval="$2"
+      shift 2
+      ;;
+    --jobs-dir)
+      [[ $# -ge 2 ]] || die "--jobs-dir requires a path"
+      jobs_dir="$2"
+      shift 2
+      ;;
+    --once)
+      once=1
+      shift
+      ;;
+    --quiet)
+      quiet=1
+      shift
+      ;;
+    -*)
+      die "unknown option: $1"
+      ;;
+    *)
+      [[ -z "$job_id" ]] || die "unexpected extra argument: $1"
+      job_id="$1"
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$job_id" ]] || die "missing jobId"
+[[ "$interval" =~ ^[0-9]+$ ]] || die "--interval must be a positive integer"
+[[ "$interval" -gt 0 ]] || die "--interval must be greater than 0"
+command -v jq >/dev/null 2>&1 || die "jq is required"
+
+job_dir="$jobs_dir/$job_id"
+state_file="$job_dir/state.json"
+result_file="$job_dir/result.json"
+progress_file="$job_dir/progress.json"
+partial_file="$job_dir/partial.txt"
+
+[[ -d "$job_dir" ]] || die "job directory not found: $job_dir"
+
+last_signature=""
+
+print_snapshot() {
+  [[ -f "$state_file" ]] || die "state file not found: $state_file"
+
+  local status event_count last_event partial_bytes seen_tools last_tail exit_code
+  status="$(jq -r '.status // "unknown"' "$state_file")"
+  event_count="$(jq -r '.eventCount // 0' "$state_file")"
+  last_event="$(jq -r '.lastEventAtMs // ""' "$state_file")"
+  partial_bytes="$(jq -r '.partialBytes // 0' "$state_file")"
+  seen_tools="$(jq -r '(.seenTools // []) | join(",")' "$state_file")"
+  last_tail="$(jq -r '.lastTextTail // ""' "$state_file")"
+  exit_code="$(jq -r '.exitCode // ""' "$state_file")"
+
+  local signature="$status|$event_count|$last_event|$partial_bytes|$seen_tools|$exit_code"
+  if [[ "$signature" == "$last_signature" ]]; then
+    return 0
+  fi
+  last_signature="$signature"
+
+  printf '%s job=%s status=%s events=%s partialBytes=%s' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$job_id" "$status" "$event_count" "$partial_bytes"
+  [[ -n "$last_event" ]] && printf ' lastEventAtMs=%s' "$last_event"
+  [[ -n "$exit_code" ]] && printf ' exitCode=%s' "$exit_code"
+  [[ -n "$seen_tools" ]] && printf ' tools=%s' "$seen_tools"
+  printf '\n'
+
+  if [[ -n "$last_tail" ]]; then
+    printf '  tail: %s\n' "$last_tail"
+  elif [[ -f "$partial_file" && -s "$partial_file" ]]; then
+    printf '  tail: %s\n' "$(tail -c 300 "$partial_file")"
+  fi
+
+  if [[ -f "$progress_file" && "$quiet" == "0" ]]; then
+    local progress_status
+    progress_status="$(jq -r '[.eventCount, .partialBytes, ((.seenTools // []) | join(","))] | @tsv' "$progress_file" 2>/dev/null || true)"
+    [[ -n "$progress_status" ]] && printf '  progress: %s\n' "$progress_status"
+  fi
+
+  case "$status" in
+    succeeded)
+      if [[ -f "$result_file" ]]; then
+        jq -r '"  result: " + ((.content // "") | gsub("\n"; " ") | .[0:500])' "$result_file" 2>/dev/null || true
+      fi
+      return 10
+      ;;
+    failed)
+      if [[ -f "$result_file" ]]; then
+        jq -r '"  error: " + (((.content // .stderrTail // "") | gsub("\n"; " ")) | .[0:800])' "$result_file" 2>/dev/null || true
+      fi
+      return 11
+      ;;
+    cancelled)
+      return 12
+      ;;
+  esac
+
+  return 0
+}
+
+while true; do
+  set +e
+  print_snapshot
+  rc=$?
+  set -e
+
+  case "$rc" in
+    0) ;;
+    10) exit 0 ;;
+    11) exit 1 ;;
+    12) exit 2 ;;
+    *) exit "$rc" ;;
+  esac
+
+  [[ "$once" == "1" ]] && exit 0
+  sleep "$interval"
+done
