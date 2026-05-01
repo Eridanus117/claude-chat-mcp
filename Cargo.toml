@@ -1,0 +1,42 @@
+[package]
+name = "claude-chat-mcp"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Stateful chat MCP wrapper that bridges codex (or any MCP host) to Anthropic Claude Code via `claude --print --output-format json [--resume <session-id>]`."
+readme = "README.md"
+repository = "https://github.com/Eridanus117/claude-chat-mcp"
+keywords = ["claude", "mcp", "anthropic", "async", "agent"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "claude-chat-mcp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+rmcp = { version = "0.15.0", default-features = false, features = [
+    "base64",
+    "macros",
+    "schemars",
+    "server",
+] }
+schemars = "0.8.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "io-std",
+    "io-util",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+    "time",
+] }
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
