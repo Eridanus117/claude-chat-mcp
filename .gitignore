@@ -1,1 +1,8 @@
 /target
+.codegraph/
+/.env
+*.db
+*.sqlite
+*.sqlite3
+/.repo-release-gate.local.toml
+/.docket-release-gate.local.toml
